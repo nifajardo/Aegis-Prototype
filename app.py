@@ -13,13 +13,29 @@ st.title("📈 Crypto Futures Backtester & Simulator")
 st.sidebar.header("Settings")
 
 # Sidebar inputs
-symbol = st.sidebar.selectbox("Trading Pair", ["BTC/USDT", "ETH/USDT"])
-timeframe = st.sidebar.selectbox("Timeframe", ["1d", "15m", "5m"])
+symbol = st.sidebar.selectbox("Trading Pair", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"])
+timeframe = st.sidebar.selectbox("Timeframe", ["1d", "4h", "1h", "15m", "5m"])
 limit = st.sidebar.slider("Number of Candles", 100, 1500, 1000)
 
-st.sidebar.subheader("Strategy Parameters (Dual MA)")
-fast_ma = st.sidebar.number_input("Fast MA Period", min_value=1, max_value=100, value=50)
-slow_ma = st.sidebar.number_input("Slow MA Period", min_value=10, max_value=500, value=200)
+st.sidebar.subheader("Strategy Selection")
+strategy_type = st.sidebar.selectbox("Strategy", ["Dual MA", "MACD", "RSI Mean Reversion", "Bollinger Bands"])
+
+# Dynamic parameter inputs based on selected strategy
+strategy_params = {}
+if strategy_type == "Dual MA":
+    strategy_params['fast_ma'] = st.sidebar.number_input("Fast MA Period", min_value=1, max_value=100, value=50)
+    strategy_params['slow_ma'] = st.sidebar.number_input("Slow MA Period", min_value=10, max_value=500, value=200)
+elif strategy_type == "MACD":
+    strategy_params['macd_fast'] = st.sidebar.number_input("MACD Fast", min_value=1, max_value=50, value=12)
+    strategy_params['macd_slow'] = st.sidebar.number_input("MACD Slow", min_value=10, max_value=100, value=26)
+    strategy_params['macd_sign'] = st.sidebar.number_input("MACD Signal", min_value=1, max_value=50, value=9)
+elif strategy_type == "RSI Mean Reversion":
+    strategy_params['rsi_window'] = st.sidebar.number_input("RSI Window", min_value=2, max_value=50, value=14)
+    strategy_params['rsi_oversold'] = st.sidebar.number_input("RSI Oversold Level", min_value=10, max_value=50, value=30)
+    strategy_params['rsi_overbought'] = st.sidebar.number_input("RSI Overbought Level", min_value=50, max_value=90, value=70)
+elif strategy_type == "Bollinger Bands":
+    strategy_params['bb_window'] = st.sidebar.number_input("BB Window", min_value=5, max_value=100, value=20)
+    strategy_params['bb_dev'] = st.sidebar.number_input("BB Std Dev", min_value=1.0, max_value=5.0, value=2.0, step=0.1)
 
 st.sidebar.subheader("Futures Parameters")
 initial_balance = st.sidebar.number_input("Initial Balance (USDT)", min_value=100, value=10000, step=100)
@@ -34,7 +50,7 @@ if df_raw.empty:
 else:
     with st.spinner('Running Strategy & Simulation...'):
         # 1. Apply Strategy
-        df_strategy = generate_signals(df_raw, fast_ma=fast_ma, slow_ma=slow_ma)
+        df_strategy = generate_signals(df_raw, strategy_type=strategy_type, **strategy_params)
 
         # 2. Run Backtest
         metrics, df_results, trades = run_backtest(df_strategy, initial_balance=initial_balance, leverage=leverage)
@@ -56,12 +72,20 @@ else:
     st.divider()
 
     # --- Charts ---
-    st.subheader("Price & Strategy Chart")
+    st.subheader(f"Strategy Analysis: {strategy_type}")
 
-    # Create Subplots: 1 for Price/MA, 1 for Equity
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                        vertical_spacing=0.03, subplot_titles=('Price & Moving Averages', 'Account Equity'),
-                        row_width=[0.3, 0.7])
+    # Create Subplots based on strategy
+    has_oscillator = strategy_type in ["MACD", "RSI Mean Reversion"]
+    if has_oscillator:
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                            vertical_spacing=0.03, subplot_titles=('Price & Signals', 'Oscillator', 'Account Equity'),
+                            row_width=[0.25, 0.25, 0.5])
+        price_row, osc_row, eq_row = 1, 2, 3
+    else:
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                            vertical_spacing=0.03, subplot_titles=('Price & Signals', 'Account Equity'),
+                            row_width=[0.3, 0.7])
+        price_row, osc_row, eq_row = 1, None, 2
 
     # Candlestick
     fig.add_trace(go.Candlestick(x=df_results.index,
@@ -69,27 +93,45 @@ else:
                                  high=df_results['high'],
                                  low=df_results['low'],
                                  close=df_results['close'],
-                                 name='Price'), row=1, col=1)
+                                 name='Price'), row=price_row, col=1)
 
-    # Moving Averages
-    fig.add_trace(go.Scatter(x=df_results.index, y=df_results['fast_ma'], line=dict(color='orange', width=1.5), name=f'Fast MA ({fast_ma})'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df_results.index, y=df_results['slow_ma'], line=dict(color='blue', width=1.5), name=f'Slow MA ({slow_ma})'), row=1, col=1)
+    # Overlay Indicators on Price Chart
+    if strategy_type == "Dual MA":
+        fig.add_trace(go.Scatter(x=df_results.index, y=df_results['fast_ma'], line=dict(color='orange', width=1.5), name='Fast MA'), row=price_row, col=1)
+        fig.add_trace(go.Scatter(x=df_results.index, y=df_results['slow_ma'], line=dict(color='blue', width=1.5), name='Slow MA'), row=price_row, col=1)
+    elif strategy_type == "Bollinger Bands":
+        fig.add_trace(go.Scatter(x=df_results.index, y=df_results['bb_high'], line=dict(color='rgba(255,0,0,0.5)', width=1, dash='dash'), name='BB High'), row=price_row, col=1)
+        fig.add_trace(go.Scatter(x=df_results.index, y=df_results['bb_low'], line=dict(color='rgba(0,255,0,0.5)', width=1, dash='dash'), name='BB Low'), row=price_row, col=1)
+        fig.add_trace(go.Scatter(x=df_results.index, y=df_results['bb_mid'], line=dict(color='rgba(0,0,255,0.5)', width=1), name='BB Mid'), row=price_row, col=1)
 
     # Entry Signals (Crossovers)
     long_signals = df_results[df_results['crossover'] == 1]
     short_signals = df_results[df_results['crossover'] == -1]
 
     fig.add_trace(go.Scatter(x=long_signals.index, y=long_signals['low'] * 0.99, mode='markers',
-                             marker=dict(symbol='triangle-up', color='green', size=12), name='Long Signal'), row=1, col=1)
+                             marker=dict(symbol='triangle-up', color='green', size=12), name='Long Entry'), row=price_row, col=1)
 
     fig.add_trace(go.Scatter(x=short_signals.index, y=short_signals['high'] * 1.01, mode='markers',
-                             marker=dict(symbol='triangle-down', color='red', size=12), name='Short Signal'), row=1, col=1)
+                             marker=dict(symbol='triangle-down', color='red', size=12), name='Short Entry'), row=price_row, col=1)
+
+    # Oscillator Subplot
+    if has_oscillator:
+        if strategy_type == "MACD":
+            fig.add_trace(go.Scatter(x=df_results.index, y=df_results['macd'], line=dict(color='blue', width=1.5), name='MACD'), row=osc_row, col=1)
+            fig.add_trace(go.Scatter(x=df_results.index, y=df_results['macd_signal'], line=dict(color='orange', width=1.5), name='Signal'), row=osc_row, col=1)
+            fig.add_trace(go.Bar(x=df_results.index, y=df_results['macd_diff'], name='Histogram', marker_color='gray'), row=osc_row, col=1)
+        elif strategy_type == "RSI Mean Reversion":
+            fig.add_trace(go.Scatter(x=df_results.index, y=df_results['rsi'], line=dict(color='purple', width=1.5), name='RSI'), row=osc_row, col=1)
+            # Overbought/Oversold lines
+            fig.add_hline(y=strategy_params['rsi_overbought'], line_dash="dash", line_color="red", row=osc_row, col=1)
+            fig.add_hline(y=strategy_params['rsi_oversold'], line_dash="dash", line_color="green", row=osc_row, col=1)
 
     # Equity Curve
-    fig.add_trace(go.Scatter(x=df_results.index, y=df_results['equity'], line=dict(color='purple', width=2), name='Equity'), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df_results.index, y=df_results['equity'], line=dict(color='purple', width=2), name='Equity'), row=eq_row, col=1)
 
     # Layout tuning
-    fig.update_layout(height=800, xaxis_rangeslider_visible=False)
+    height = 900 if has_oscillator else 700
+    fig.update_layout(height=height, xaxis_rangeslider_visible=False)
 
     st.plotly_chart(fig, use_container_width=True)
 

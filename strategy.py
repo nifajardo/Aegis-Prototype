@@ -1,60 +1,87 @@
 import pandas as pd
 import numpy as np
+from ta.momentum import RSIIndicator
+from ta.trend import MACD
+from ta.volatility import BollingerBands
 
-def generate_signals(df: pd.DataFrame, fast_ma: int = 50, slow_ma: int = 200) -> pd.DataFrame:
+def generate_signals(df: pd.DataFrame, strategy_type: str = 'Dual MA', **kwargs) -> pd.DataFrame:
     """
-    Applies the Dual Moving Average Crossover strategy.
+    Applies the selected trading strategy and generates entry/exit signals.
 
     Args:
         df (pd.DataFrame): DataFrame with OHLCV data.
-        fast_ma (int): Period for the fast moving average.
-        slow_ma (int): Period for the slow moving average.
+        strategy_type (str): The strategy to apply.
+        **kwargs: Strategy-specific parameters.
 
     Returns:
-        pd.DataFrame: The original DataFrame with added 'fast_ma', 'slow_ma', and 'signal' columns.
+        pd.DataFrame: DataFrame with added indicator columns, 'position', and 'crossover'.
     """
     df_strategy = df.copy()
+    df_strategy['position'] = 0
+    df_strategy['crossover'] = 0
 
-    # Calculate moving averages
-    df_strategy['fast_ma'] = df_strategy['close'].rolling(window=fast_ma).mean()
-    df_strategy['slow_ma'] = df_strategy['close'].rolling(window=slow_ma).mean()
+    if strategy_type == 'Dual MA':
+        fast_ma = kwargs.get('fast_ma', 50)
+        slow_ma = kwargs.get('slow_ma', 200)
 
-    # Initialize signal column
-    df_strategy['signal'] = 0
+        df_strategy['fast_ma'] = df_strategy['close'].rolling(window=fast_ma).mean()
+        df_strategy['slow_ma'] = df_strategy['close'].rolling(window=slow_ma).mean()
 
-    # Generate signals:
-    # 1 for Long (fast_ma crosses above slow_ma)
-    # -1 for Short (fast_ma crosses below slow_ma)
+        df_strategy.loc[df_strategy['fast_ma'] > df_strategy['slow_ma'], 'position'] = 1
+        df_strategy.loc[df_strategy['fast_ma'] < df_strategy['slow_ma'], 'position'] = -1
 
-    # We only care about the crossover points, but for a continuous position we can hold
-    # the signal as long as fast > slow.
-    # In a continuous system:
-    # If fast_ma > slow_ma, position is LONG (1)
-    # If fast_ma < slow_ma, position is SHORT (-1)
-    df_strategy.loc[df_strategy['fast_ma'] > df_strategy['slow_ma'], 'position'] = 1
-    df_strategy.loc[df_strategy['fast_ma'] < df_strategy['slow_ma'], 'position'] = -1
+    elif strategy_type == 'MACD':
+        window_fast = kwargs.get('macd_fast', 12)
+        window_slow = kwargs.get('macd_slow', 26)
+        window_sign = kwargs.get('macd_sign', 9)
 
-    # Forward fill positions for continuous holding
-    # Wait, the above logic is already continuous. Let's make sure it handles NaNs.
+        macd_indicator = MACD(close=df_strategy['close'], window_fast=window_fast, window_slow=window_slow, window_sign=window_sign)
+        df_strategy['macd'] = macd_indicator.macd()
+        df_strategy['macd_signal'] = macd_indicator.macd_signal()
+        df_strategy['macd_diff'] = macd_indicator.macd_diff()
+
+        # Long when MACD > Signal, Short when MACD < Signal
+        df_strategy.loc[df_strategy['macd'] > df_strategy['macd_signal'], 'position'] = 1
+        df_strategy.loc[df_strategy['macd'] < df_strategy['macd_signal'], 'position'] = -1
+
+    elif strategy_type == 'RSI Mean Reversion':
+        rsi_window = kwargs.get('rsi_window', 14)
+        rsi_oversold = kwargs.get('rsi_oversold', 30)
+        rsi_overbought = kwargs.get('rsi_overbought', 70)
+
+        rsi_indicator = RSIIndicator(close=df_strategy['close'], window=rsi_window)
+        df_strategy['rsi'] = rsi_indicator.rsi()
+
+        # We need a stateful approach for RSI (hold until opposite signal)
+        # 1. Generate Raw Signals
+        df_strategy['raw_signal'] = 0
+        df_strategy.loc[df_strategy['rsi'] < rsi_oversold, 'raw_signal'] = 1 # Buy
+        df_strategy.loc[df_strategy['rsi'] > rsi_overbought, 'raw_signal'] = -1 # Sell
+
+        # 2. Forward fill the raw signals to create continuous positions
+        df_strategy['position'] = df_strategy['raw_signal'].replace(0, np.nan).ffill().fillna(0)
+
+    elif strategy_type == 'Bollinger Bands':
+        bb_window = kwargs.get('bb_window', 20)
+        bb_dev = kwargs.get('bb_dev', 2.0)
+
+        bb_indicator = BollingerBands(close=df_strategy['close'], window=bb_window, window_dev=bb_dev)
+        df_strategy['bb_high'] = bb_indicator.bollinger_hband()
+        df_strategy['bb_low'] = bb_indicator.bollinger_lband()
+        df_strategy['bb_mid'] = bb_indicator.bollinger_mavg()
+
+        # Mean Reversion using BB:
+        # Buy when price closes below Lower Band. Sell when price closes above Upper Band.
+        df_strategy['raw_signal'] = 0
+        df_strategy.loc[df_strategy['close'] < df_strategy['bb_low'], 'raw_signal'] = 1
+        df_strategy.loc[df_strategy['close'] > df_strategy['bb_high'], 'raw_signal'] = -1
+
+        df_strategy['position'] = df_strategy['raw_signal'].replace(0, np.nan).ffill().fillna(0)
+
+    # Clean up position and calculate crossovers
     df_strategy['position'] = df_strategy['position'].ffill().fillna(0)
-
-    # The 'signal' represents the change in position
     df_strategy['signal'] = df_strategy['position'].diff()
-
-    # We can also identify the exact crossover point
     df_strategy['crossover'] = np.where(df_strategy['signal'] > 0, 1,
                                         np.where(df_strategy['signal'] < 0, -1, 0))
 
     return df_strategy
-
-if __name__ == "__main__":
-    # Test strategy generator
-    import numpy as np
-
-    # Create fake data
-    dates = pd.date_range('2023-01-01', periods=100)
-    prices = np.linspace(10, 20, 50).tolist() + np.linspace(20, 10, 50).tolist()
-    df_test = pd.DataFrame({'close': prices}, index=dates)
-
-    df_res = generate_signals(df_test, fast_ma=5, slow_ma=10)
-    print(df_res[df_res['crossover'] != 0])
