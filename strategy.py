@@ -78,6 +78,36 @@ def generate_signals(df: pd.DataFrame, strategy_type: str = 'Dual MA', **kwargs)
 
         df_strategy['position'] = df_strategy['raw_signal'].replace(0, np.nan).ffill().fillna(0)
 
+    elif strategy_type == 'Dynamic Grid':
+        grid_window = kwargs.get('grid_window', 20)
+        grid_dev = kwargs.get('grid_dev', 2.0)
+        grid_levels = kwargs.get('grid_levels', 5)
+
+        # Calculate dynamic bounds (using SMA and ATR or StdDev)
+        # We will use StdDev to define the total grid height
+        df_strategy['grid_mid'] = df_strategy['close'].rolling(window=grid_window).mean()
+        std_dev = df_strategy['close'].rolling(window=grid_window).std()
+
+        df_strategy['grid_top'] = df_strategy['grid_mid'] + (std_dev * grid_dev)
+        df_strategy['grid_bottom'] = df_strategy['grid_mid'] - (std_dev * grid_dev)
+
+        # Generate logic based on crossing inner grid tiers
+        # Simple Dynamic Grid logic (mean reversion back to mid):
+        # We divide the lower half into buy zones and upper half into sell zones
+        df_strategy['raw_signal'] = 0
+
+        # For a simplified continuous simulation based on academic studies:
+        # Go Long when price drops below the first grid tier in the lower half
+        # Go Short when price rises above the first grid tier in the upper half
+        step_size = (df_strategy['grid_top'] - df_strategy['grid_mid']) / (grid_levels / 2)
+        lower_tier_1 = df_strategy['grid_mid'] - step_size
+        upper_tier_1 = df_strategy['grid_mid'] + step_size
+
+        df_strategy.loc[df_strategy['close'] < lower_tier_1, 'raw_signal'] = 1
+        df_strategy.loc[df_strategy['close'] > upper_tier_1, 'raw_signal'] = -1
+
+        df_strategy['position'] = df_strategy['raw_signal'].replace(0, np.nan).ffill().fillna(0)
+
     # Clean up position and calculate crossovers
     df_strategy['position'] = df_strategy['position'].ffill().fillna(0)
     df_strategy['signal'] = df_strategy['position'].diff()

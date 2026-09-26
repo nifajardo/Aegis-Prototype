@@ -18,7 +18,7 @@ timeframe = st.sidebar.selectbox("Timeframe", ["1d", "4h", "1h", "15m", "5m"])
 limit = st.sidebar.slider("Number of Candles", 100, 1500, 1000)
 
 st.sidebar.subheader("Strategy Selection")
-strategy_type = st.sidebar.selectbox("Strategy", ["Dual MA", "MACD", "RSI Mean Reversion", "Bollinger Bands"])
+strategy_type = st.sidebar.selectbox("Strategy", ["Dual MA", "MACD", "RSI Mean Reversion", "Bollinger Bands", "Dynamic Grid"])
 
 # Dynamic parameter inputs based on selected strategy
 strategy_params = {}
@@ -36,6 +36,10 @@ elif strategy_type == "RSI Mean Reversion":
 elif strategy_type == "Bollinger Bands":
     strategy_params['bb_window'] = st.sidebar.number_input("BB Window", min_value=5, max_value=100, value=20)
     strategy_params['bb_dev'] = st.sidebar.number_input("BB Std Dev", min_value=1.0, max_value=5.0, value=2.0, step=0.1)
+elif strategy_type == "Dynamic Grid":
+    strategy_params['grid_window'] = st.sidebar.number_input("Grid Window (Lookback)", min_value=5, max_value=200, value=20)
+    strategy_params['grid_dev'] = st.sidebar.number_input("Grid Width (Std Dev)", min_value=0.5, max_value=5.0, value=2.0, step=0.1)
+    strategy_params['grid_levels'] = st.sidebar.number_input("Total Grid Levels", min_value=2, max_value=50, value=10)
 
 st.sidebar.subheader("Futures Parameters")
 initial_balance = st.sidebar.number_input("Initial Balance (USDT)", min_value=100, value=10000, step=100)
@@ -111,6 +115,10 @@ else:
         fig.add_trace(go.Scatter(x=df_results.index, y=df_results['bb_high'], line=dict(color='rgba(255,0,0,0.5)', width=1, dash='dash'), name='BB High'), row=price_row, col=1)
         fig.add_trace(go.Scatter(x=df_results.index, y=df_results['bb_low'], line=dict(color='rgba(0,255,0,0.5)', width=1, dash='dash'), name='BB Low'), row=price_row, col=1)
         fig.add_trace(go.Scatter(x=df_results.index, y=df_results['bb_mid'], line=dict(color='rgba(0,0,255,0.5)', width=1), name='BB Mid'), row=price_row, col=1)
+    elif strategy_type == "Dynamic Grid":
+        fig.add_trace(go.Scatter(x=df_results.index, y=df_results['grid_top'], line=dict(color='rgba(255,0,0,0.5)', width=1, dash='dot'), name='Grid Top'), row=price_row, col=1)
+        fig.add_trace(go.Scatter(x=df_results.index, y=df_results['grid_bottom'], line=dict(color='rgba(0,255,0,0.5)', width=1, dash='dot'), name='Grid Bottom'), row=price_row, col=1)
+        fig.add_trace(go.Scatter(x=df_results.index, y=df_results['grid_mid'], line=dict(color='rgba(0,0,0,0.5)', width=1), name='Grid Mid'), row=price_row, col=1)
 
     # Entry Signals (Crossovers)
     long_signals = df_results[df_results['crossover'] == 1]
