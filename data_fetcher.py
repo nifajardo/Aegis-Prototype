@@ -7,40 +7,23 @@ import datetime
 def fetch_historical_data(symbol: str, timeframe: str, limit: int = 1000):
     """
     Fetches historical OHLCV data for a given symbol and timeframe.
-    Uses OKX since Binance is geoblocked.
+    Uses Kraken because Binance and OKX might have regional restrictions.
 
     Args:
         symbol (str): Trading pair symbol (e.g., 'BTC/USDT').
         timeframe (str): Timeframe (e.g., '1d', '15m', '5m').
-        limit (int): Number of candles to fetch (max 100 for OKX typically, but ccxt handles pagination/fetching).
+        limit (int): Number of candles to fetch.
 
     Returns:
         pd.DataFrame: DataFrame containing historical data.
     """
     try:
-        # Initialize OKX market (Swap/Futures)
-        # In OKX, swap symbols typically look like BTC-USDT-SWAP, but we can try normal spot/swap mapping
-        exchange = ccxt.okx({
+        # Initialize Kraken market
+        exchange = ccxt.kraken({
             'enableRateLimit': True,
         })
 
-        # OKX uses SWAP for perpetual futures
-        # We'll map standard symbols like BTC/USDT to their Swap equivalent BTC/USDT:USDT if needed
-        # Or let ccxt try to figure it out
-        market_symbol = f"{symbol.replace('/', '-')}-SWAP"
-
-        try:
-            exchange.load_markets()
-            if market_symbol in exchange.markets:
-                target_symbol = market_symbol
-            elif symbol in exchange.markets:
-                target_symbol = symbol
-            else:
-                target_symbol = f"{symbol}:USDT" # Standard ccxt swap symbol format
-        except Exception:
-            target_symbol = f"{symbol}:USDT"
-
-        ohlcv = exchange.fetch_ohlcv(target_symbol, timeframe, limit=limit)
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
 
         # Convert to Pandas DataFrame
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
