@@ -1,15 +1,17 @@
 import pandas as pd
 import numpy as np
 
-def run_backtest(df: pd.DataFrame, initial_balance: float = 10000.0, leverage: int = 1):
+def run_backtest(df: pd.DataFrame, initial_balance: float = 10000.0, leverage: int = 1, stop_loss_pct: float = 0.0, take_profit_pct: float = 0.0):
     """
     Simulates trading based on generated signals.
-    Handles futures mechanics like leverage, liquidation, going long and short.
+    Handles futures mechanics like leverage, liquidation, stop losses, take profits, and going long and short.
 
     Args:
         df (pd.DataFrame): Dataframe with OHLCV data and 'position' column from strategy.
         initial_balance (float): Starting balance in quote currency (e.g., USDT).
         leverage (int): Leverage multiplier.
+        stop_loss_pct (float): Stop loss percentage (e.g., 2.0 for 2%). 0 to disable.
+        take_profit_pct (float): Take profit percentage (e.g., 5.0 for 5%). 0 to disable.
 
     Returns:
         dict: Backtest metrics and history.
@@ -25,12 +27,15 @@ def run_backtest(df: pd.DataFrame, initial_balance: float = 10000.0, leverage: i
     equity_history = []
     trades = []
 
-    # Pre-compute close prices for faster iteration
+    # Pre-compute prices for faster iteration
     closes = df_bt['close'].values
     highs = df_bt['high'].values
     lows = df_bt['low'].values
     positions = df_bt['position'].values
     timestamps = df_bt.index
+
+    sl_decimal = stop_loss_pct / 100.0 if stop_loss_pct > 0 else 0
+    tp_decimal = take_profit_pct / 100.0 if take_profit_pct > 0 else 0
 
     for i in range(len(df_bt)):
         price = closes[i]
@@ -39,42 +44,108 @@ def run_backtest(df: pd.DataFrame, initial_balance: float = 10000.0, leverage: i
         target_position = positions[i]
         ts = timestamps[i]
 
-        # Check for liquidation if we are in a position
+        # 1. Check for constraints (Liquidation, Stop Loss, Take Profit) if in a position
         if current_position != 0:
-            # Liquidation distance = 100% / leverage
             liq_percentage = 1.0 / leverage
 
             is_liquidated = False
+            hit_sl = False
+            hit_tp = False
+            exit_reason = None
+            exit_price = 0.0
 
             if current_position == 1:
-                # Long liquidation: Price drops by liq_percentage
                 liq_price = entry_price * (1 - liq_percentage)
-                if low <= liq_price:
+                sl_price = entry_price * (1 - sl_decimal) if sl_decimal > 0 else -1
+                tp_price = entry_price * (1 + tp_decimal) if tp_decimal > 0 else float('inf')
+
+                # Check hits in order of proximity to the entry price within the candle bounds
+                # If SL is hit before Liquidation on a massive wick, SL should trigger first.
+                if sl_decimal > 0 and low <= sl_price:
+                    hit_sl = True
+                    exit_reason = 'STOP_LOSS'
+                    exit_price = sl_price
+                elif low <= liq_price:
                     is_liquidated = True
+                    exit_price = liq_price
+                elif tp_decimal > 0 and high >= tp_price:
+                    hit_tp = True
+                    exit_reason = 'TAKE_PROFIT'
+                    exit_price = tp_price
+
             elif current_position == -1:
-                # Short liquidation: Price rises by liq_percentage
                 liq_price = entry_price * (1 + liq_percentage)
-                if high >= liq_price:
+                sl_price = entry_price * (1 + sl_decimal) if sl_decimal > 0 else float('inf')
+                tp_price = entry_price * (1 - tp_decimal) if tp_decimal > 0 else -1
+
+                if sl_decimal > 0 and high >= sl_price:
+                    hit_sl = True
+                    exit_reason = 'STOP_LOSS'
+                    exit_price = sl_price
+                elif high >= liq_price:
                     is_liquidated = True
+                    exit_price = liq_price
+                elif tp_decimal > 0 and low <= tp_price:
+                    hit_tp = True
+                    exit_reason = 'TAKE_PROFIT'
+                    exit_price = tp_price
 
             if is_liquidated:
-                # Lose all margin for this trade.
-                # Assuming isolated margin and we used all balance as margin
                 loss = balance
                 balance = 0
                 trades.append({
                     'exit_time': ts,
                     'type': 'LIQUIDATION',
                     'entry_price': entry_price,
-                    'exit_price': liq_price,
-                    'pnl': -loss, # Lost everything
+                    'exit_price': exit_price,
+                    'pnl': -loss,
                     'return_pct': -100.0
                 })
                 current_position = 0
+                target_position = 0 # Force flat until next signal change
                 equity_history.append(balance)
-                break # Stop simulation if balance is 0
+                break # Stop simulation entirely if blown up
 
-        # If position changes, close old position and open new one
+            elif hit_sl or hit_tp:
+                # Calculate PNL at the constraint price
+                if current_position == 1:
+                    pnl = (exit_price - entry_price) * position_size
+                else:
+                    pnl = (entry_price - exit_price) * position_size
+
+                balance += pnl
+                trade_return_pct = (pnl / (balance - pnl)) * 100 if (balance - pnl) > 0 else 0
+
+                trades.append({
+                    'exit_time': ts,
+                    'type': exit_reason,
+                    'entry_price': entry_price,
+                    'exit_price': exit_price,
+                    'pnl': pnl,
+                    'return_pct': trade_return_pct
+                })
+
+                current_position = 0
+                # If we hit a constraint, we stay flat until the strategy signal flips again to enter a new trade
+                target_position = 0
+                # Note: This prevents instantly re-entering on the same candle if the signal is still the same.
+
+        # 2. Check for Strategy Signal Changes
+        if target_position != current_position and target_position != 0:
+            # If SL/TP flattened us (current = 0), we only want to re-enter on a new explicit signal,
+            # not just because the continuous strategy state is still 1.
+            # We check the 'crossover' column if it exists to verify an explicit signal.
+            if 'crossover' in df_bt.columns:
+                crossover_signal = df_bt['crossover'].iloc[i]
+                if crossover_signal != 0:
+                    target_position = crossover_signal
+                else:
+                    # No new explicit signal, stay flat
+                    target_position = current_position
+            else:
+                # Fallback for simple tests without a crossover column
+                pass
+
         if target_position != current_position:
             # Close existing position
             if current_position != 0:

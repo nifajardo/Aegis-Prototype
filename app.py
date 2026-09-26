@@ -40,6 +40,8 @@ elif strategy_type == "Bollinger Bands":
 st.sidebar.subheader("Futures Parameters")
 initial_balance = st.sidebar.number_input("Initial Balance (USDT)", min_value=100, value=10000, step=100)
 leverage = st.sidebar.slider("Leverage", min_value=1, max_value=100, value=10)
+stop_loss_pct = st.sidebar.number_input("Stop Loss (%)", min_value=0.0, max_value=100.0, value=2.0, step=0.1, help="Set to 0 to disable")
+take_profit_pct = st.sidebar.number_input("Take Profit (%)", min_value=0.0, max_value=1000.0, value=5.0, step=0.1, help="Set to 0 to disable")
 
 # Main Execution
 with st.spinner('Fetching Data...'):
@@ -53,7 +55,13 @@ else:
         df_strategy = generate_signals(df_raw, strategy_type=strategy_type, **strategy_params)
 
         # 2. Run Backtest
-        metrics, df_results, trades = run_backtest(df_strategy, initial_balance=initial_balance, leverage=leverage)
+        metrics, df_results, trades = run_backtest(
+            df_strategy,
+            initial_balance=initial_balance,
+            leverage=leverage,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct
+        )
 
     # --- UI Layout ---
 
