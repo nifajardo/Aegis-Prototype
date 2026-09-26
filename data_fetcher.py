@@ -7,7 +7,7 @@ import datetime
 def fetch_historical_data(symbol: str, timeframe: str, limit: int = 1000):
     """
     Fetches historical OHLCV data for a given symbol and timeframe.
-    Uses Kraken because Binance and OKX might have regional restrictions.
+    Uses KuCoin because Binance, OKX, and Kraken might have regional restrictions.
 
     Args:
         symbol (str): Trading pair symbol (e.g., 'BTC/USDT').
@@ -18,8 +18,8 @@ def fetch_historical_data(symbol: str, timeframe: str, limit: int = 1000):
         pd.DataFrame: DataFrame containing historical data.
     """
     try:
-        # Initialize Kraken market
-        exchange = ccxt.kraken({
+        # Initialize KuCoin market
+        exchange = ccxt.kucoin({
             'enableRateLimit': True,
         })
 
