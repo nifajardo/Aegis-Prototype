@@ -18,7 +18,7 @@ timeframe = st.sidebar.selectbox("Timeframe", ["1d", "4h", "1h", "15m", "5m"])
 limit = st.sidebar.slider("Number of Candles", 100, 1500, 1000)
 
 st.sidebar.subheader("Strategy Selection")
-strategy_type = st.sidebar.selectbox("Strategy", ["Dual MA", "MACD", "RSI Mean Reversion", "Bollinger Bands", "Dynamic Grid"])
+strategy_type = st.sidebar.selectbox("Strategy", ["Dual MA", "MACD", "RSI Mean Reversion", "Bollinger Bands", "Dynamic Grid", "Time-Series Momentum (TSMOM)"])
 
 # Dynamic parameter inputs based on selected strategy
 strategy_params = {}
@@ -40,6 +40,8 @@ elif strategy_type == "Dynamic Grid":
     strategy_params['grid_window'] = st.sidebar.number_input("Grid Window (Lookback)", min_value=5, max_value=200, value=20)
     strategy_params['grid_dev'] = st.sidebar.number_input("Grid Width (Std Dev)", min_value=0.5, max_value=5.0, value=2.0, step=0.1)
     strategy_params['grid_levels'] = st.sidebar.number_input("Total Grid Levels", min_value=2, max_value=50, value=10)
+elif strategy_type == "Time-Series Momentum (TSMOM)":
+    strategy_params['tsmom_lookback'] = st.sidebar.number_input("Momentum Lookback (Periods)", min_value=10, max_value=500, value=30)
 
 st.sidebar.subheader("Futures Parameters")
 initial_balance = st.sidebar.number_input("Initial Balance (USDT)", min_value=100, value=10000, step=100)
@@ -87,7 +89,7 @@ else:
     st.subheader(f"Strategy Analysis: {strategy_type}")
 
     # Create Subplots based on strategy
-    has_oscillator = strategy_type in ["MACD", "RSI Mean Reversion"]
+    has_oscillator = strategy_type in ["MACD", "RSI Mean Reversion", "Time-Series Momentum (TSMOM)"]
     if has_oscillator:
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
                             vertical_spacing=0.03, subplot_titles=('Price & Signals', 'Oscillator', 'Account Equity'),
@@ -141,6 +143,9 @@ else:
             # Overbought/Oversold lines
             fig.add_hline(y=strategy_params['rsi_overbought'], line_dash="dash", line_color="red", row=osc_row, col=1)
             fig.add_hline(y=strategy_params['rsi_oversold'], line_dash="dash", line_color="green", row=osc_row, col=1)
+        elif strategy_type == "Time-Series Momentum (TSMOM)":
+            fig.add_trace(go.Bar(x=df_results.index, y=df_results['momentum_return'], marker_color='blue', name='Momentum (Return)'), row=osc_row, col=1)
+            fig.add_hline(y=0, line_dash="dash", line_color="black", row=osc_row, col=1)
 
     # Equity Curve
     fig.add_trace(go.Scatter(x=df_results.index, y=df_results['equity'], line=dict(color='purple', width=2), name='Equity'), row=eq_row, col=1)

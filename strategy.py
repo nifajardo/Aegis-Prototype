@@ -108,6 +108,24 @@ def generate_signals(df: pd.DataFrame, strategy_type: str = 'Dual MA', **kwargs)
 
         df_strategy['position'] = df_strategy['raw_signal'].replace(0, np.nan).ffill().fillna(0)
 
+    elif strategy_type == 'Time-Series Momentum (TSMOM)':
+        tsmom_lookback = kwargs.get('tsmom_lookback', 30)
+
+        # Calculate the return over the lookback period
+        # TSMOM goes Long if the past return is positive, Short if negative.
+        df_strategy['momentum_return'] = df_strategy['close'].pct_change(periods=tsmom_lookback)
+
+        # We can also add an SMA filter to ensure we are trading with the primary trend
+        # as noted in many trend-following studies.
+        sma_filter = df_strategy['close'].rolling(window=tsmom_lookback).mean()
+
+        df_strategy['raw_signal'] = 0
+        # Basic TSMOM: Signal is the sign of the past return
+        df_strategy.loc[(df_strategy['momentum_return'] > 0) & (df_strategy['close'] > sma_filter), 'raw_signal'] = 1
+        df_strategy.loc[(df_strategy['momentum_return'] < 0) & (df_strategy['close'] < sma_filter), 'raw_signal'] = -1
+
+        df_strategy['position'] = df_strategy['raw_signal'].replace(0, np.nan).ffill().fillna(0)
+
     # Clean up position and calculate crossovers
     df_strategy['position'] = df_strategy['position'].ffill().fillna(0)
     df_strategy['signal'] = df_strategy['position'].diff()
