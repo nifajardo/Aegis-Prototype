@@ -126,6 +126,44 @@ def generate_signals(df: pd.DataFrame, strategy_type: str = 'Dual MA', **kwargs)
 
         df_strategy['position'] = df_strategy['raw_signal'].replace(0, np.nan).ffill().fillna(0)
 
+    elif strategy_type == 'Multi-Timeframe (MTF) Alignment':
+        # HTF Trend settings
+        htf_window = kwargs.get('htf_window', 50)
+
+        # LTF Trigger settings (Using simple fast/slow MA cross for LTF trigger)
+        ltf_fast = kwargs.get('ltf_fast', 10)
+        ltf_slow = kwargs.get('ltf_slow', 30)
+
+        # 1. Compute HTF (Daily) Trend
+        # Resample closing prices to daily to determine macro trend
+        df_daily = df_strategy['close'].resample('1D').last()
+        df_daily_sma = df_daily.rolling(window=htf_window).mean()
+
+        # Shift HTF by 1 to prevent lookahead bias (today's SMA is only known tomorrow morning)
+        df_daily_sma_shifted = df_daily_sma.shift(1)
+
+        # Map HTF back to the LTF index
+        df_strategy['date_only'] = df_strategy.index.normalize()
+        df_daily_sma_shifted.name = 'htf_sma'
+
+        df_strategy = df_strategy.join(df_daily_sma_shifted, on='date_only')
+        df_strategy.drop('date_only', axis=1, inplace=True)
+
+        # 2. Compute LTF Signals
+        df_strategy['ltf_fast_ma'] = df_strategy['close'].rolling(window=ltf_fast).mean()
+        df_strategy['ltf_slow_ma'] = df_strategy['close'].rolling(window=ltf_slow).mean()
+
+        df_strategy['raw_signal'] = 0
+
+        # 3. Align LTF trigger with HTF Trend
+        # Buy: HTF is trending UP (Close > HTF SMA) AND LTF crosses UP
+        df_strategy.loc[(df_strategy['close'] > df_strategy['htf_sma']) & (df_strategy['ltf_fast_ma'] > df_strategy['ltf_slow_ma']), 'raw_signal'] = 1
+
+        # Sell: HTF is trending DOWN (Close < HTF SMA) AND LTF crosses DOWN
+        df_strategy.loc[(df_strategy['close'] < df_strategy['htf_sma']) & (df_strategy['ltf_fast_ma'] < df_strategy['ltf_slow_ma']), 'raw_signal'] = -1
+
+        df_strategy['position'] = df_strategy['raw_signal'].replace(0, np.nan).ffill().fillna(0)
+
     # Clean up position and calculate crossovers
     df_strategy['position'] = df_strategy['position'].ffill().fillna(0)
     df_strategy['signal'] = df_strategy['position'].diff()

@@ -1,10 +1,10 @@
 import pandas as pd
 import numpy as np
 
-def run_backtest(df: pd.DataFrame, initial_balance: float = 10000.0, leverage: int = 1, stop_loss_pct: float = 0.0, take_profit_pct: float = 0.0):
+def run_backtest(df: pd.DataFrame, initial_balance: float = 10000.0, leverage: int = 1, stop_loss_pct: float = 0.0, take_profit_pct: float = 0.0, trailing_stop_pct: float = 0.0):
     """
     Simulates trading based on generated signals.
-    Handles futures mechanics like leverage, liquidation, stop losses, take profits, and going long and short.
+    Handles futures mechanics like leverage, liquidation, stop losses, take profits, trailing stops, and going long and short.
 
     Args:
         df (pd.DataFrame): Dataframe with OHLCV data and 'position' column from strategy.
@@ -12,6 +12,7 @@ def run_backtest(df: pd.DataFrame, initial_balance: float = 10000.0, leverage: i
         leverage (int): Leverage multiplier.
         stop_loss_pct (float): Stop loss percentage (e.g., 2.0 for 2%). 0 to disable.
         take_profit_pct (float): Take profit percentage (e.g., 5.0 for 5%). 0 to disable.
+        trailing_stop_pct (float): Trailing stop loss percentage (e.g., 1.5 for 1.5%). 0 to disable.
 
     Returns:
         dict: Backtest metrics and history.
@@ -23,6 +24,8 @@ def run_backtest(df: pd.DataFrame, initial_balance: float = 10000.0, leverage: i
     position_size = 0.0 # the amount of base currency (e.g., BTC) we hold
     entry_price = 0.0
     current_position = 0 # 1 for Long, -1 for Short, 0 for Flat
+
+    extreme_price = 0.0 # highest price for longs, lowest for shorts since entry
 
     equity_history = []
     trades = []
@@ -36,6 +39,7 @@ def run_backtest(df: pd.DataFrame, initial_balance: float = 10000.0, leverage: i
 
     sl_decimal = stop_loss_pct / 100.0 if stop_loss_pct > 0 else 0
     tp_decimal = take_profit_pct / 100.0 if take_profit_pct > 0 else 0
+    tsl_decimal = trailing_stop_pct / 100.0 if trailing_stop_pct > 0 else 0
 
     for i in range(len(df_bt)):
         price = closes[i]
@@ -44,27 +48,39 @@ def run_backtest(df: pd.DataFrame, initial_balance: float = 10000.0, leverage: i
         target_position = positions[i]
         ts = timestamps[i]
 
-        # 1. Check for constraints (Liquidation, Stop Loss, Take Profit) if in a position
+        # 1. Check for constraints (Liquidation, Stop Loss, Take Profit, Trailing Stop) if in a position
         if current_position != 0:
             liq_percentage = 1.0 / leverage
 
             is_liquidated = False
             hit_sl = False
             hit_tp = False
+            hit_tsl = False
             exit_reason = None
             exit_price = 0.0
 
             if current_position == 1:
+                extreme_price = max(extreme_price, high)
+
                 liq_price = entry_price * (1 - liq_percentage)
                 sl_price = entry_price * (1 - sl_decimal) if sl_decimal > 0 else -1
                 tp_price = entry_price * (1 + tp_decimal) if tp_decimal > 0 else float('inf')
+                tsl_price = extreme_price * (1 - tsl_decimal) if tsl_decimal > 0 else -1
 
-                # Check hits in order of proximity to the entry price within the candle bounds
-                # If SL is hit before Liquidation on a massive wick, SL should trigger first.
-                if sl_decimal > 0 and low <= sl_price:
+                # Ensure the trailing stop doesn't move lower than the static stop loss
+                if tsl_decimal > 0 and sl_decimal > 0:
+                    effective_sl_price = max(sl_price, tsl_price)
+                elif tsl_decimal > 0:
+                    effective_sl_price = tsl_price
+                elif sl_decimal > 0:
+                    effective_sl_price = sl_price
+                else:
+                    effective_sl_price = -1
+
+                if effective_sl_price > 0 and low <= effective_sl_price:
                     hit_sl = True
-                    exit_reason = 'STOP_LOSS'
-                    exit_price = sl_price
+                    exit_reason = 'TRAILING_STOP' if effective_sl_price == tsl_price else 'STOP_LOSS'
+                    exit_price = effective_sl_price
                 elif low <= liq_price:
                     is_liquidated = True
                     exit_price = liq_price
@@ -74,14 +90,26 @@ def run_backtest(df: pd.DataFrame, initial_balance: float = 10000.0, leverage: i
                     exit_price = tp_price
 
             elif current_position == -1:
+                extreme_price = min(extreme_price, low)
+
                 liq_price = entry_price * (1 + liq_percentage)
                 sl_price = entry_price * (1 + sl_decimal) if sl_decimal > 0 else float('inf')
                 tp_price = entry_price * (1 - tp_decimal) if tp_decimal > 0 else -1
+                tsl_price = extreme_price * (1 + tsl_decimal) if tsl_decimal > 0 else float('inf')
 
-                if sl_decimal > 0 and high >= sl_price:
+                if tsl_decimal > 0 and sl_decimal > 0:
+                    effective_sl_price = min(sl_price, tsl_price)
+                elif tsl_decimal > 0:
+                    effective_sl_price = tsl_price
+                elif sl_decimal > 0:
+                    effective_sl_price = sl_price
+                else:
+                    effective_sl_price = float('inf')
+
+                if effective_sl_price != float('inf') and high >= effective_sl_price:
                     hit_sl = True
-                    exit_reason = 'STOP_LOSS'
-                    exit_price = sl_price
+                    exit_reason = 'TRAILING_STOP' if effective_sl_price == tsl_price else 'STOP_LOSS'
+                    exit_price = effective_sl_price
                 elif high >= liq_price:
                     is_liquidated = True
                     exit_price = liq_price
@@ -174,12 +202,14 @@ def run_backtest(df: pd.DataFrame, initial_balance: float = 10000.0, leverage: i
             current_position = target_position
             if current_position != 0:
                 entry_price = price
+                extreme_price = price
                 # We use all available balance for margin.
                 # Total trade value = balance * leverage
                 position_size = (balance * leverage) / entry_price
             else:
                 position_size = 0.0
                 entry_price = 0.0
+                extreme_price = 0.0
 
         # Record equity (Mark to market)
         current_equity = balance

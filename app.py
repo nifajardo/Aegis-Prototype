@@ -18,7 +18,7 @@ timeframe = st.sidebar.selectbox("Timeframe", ["1d", "4h", "1h", "15m", "5m"])
 limit = st.sidebar.slider("Number of Candles", 100, 1500, 1000)
 
 st.sidebar.subheader("Strategy Selection")
-strategy_type = st.sidebar.selectbox("Strategy", ["Dual MA", "MACD", "RSI Mean Reversion", "Bollinger Bands", "Dynamic Grid", "Time-Series Momentum (TSMOM)"])
+strategy_type = st.sidebar.selectbox("Strategy", ["Dual MA", "MACD", "RSI Mean Reversion", "Bollinger Bands", "Dynamic Grid", "Time-Series Momentum (TSMOM)", "Multi-Timeframe (MTF) Alignment"])
 
 # Dynamic parameter inputs based on selected strategy
 strategy_params = {}
@@ -42,12 +42,17 @@ elif strategy_type == "Dynamic Grid":
     strategy_params['grid_levels'] = st.sidebar.number_input("Total Grid Levels", min_value=2, max_value=50, value=10)
 elif strategy_type == "Time-Series Momentum (TSMOM)":
     strategy_params['tsmom_lookback'] = st.sidebar.number_input("Momentum Lookback (Periods)", min_value=10, max_value=500, value=30)
+elif strategy_type == "Multi-Timeframe (MTF) Alignment":
+    strategy_params['htf_window'] = st.sidebar.number_input("Daily Trend SMA Filter", min_value=10, max_value=200, value=50)
+    strategy_params['ltf_fast'] = st.sidebar.number_input("LTF Fast MA Trigger", min_value=1, max_value=50, value=10)
+    strategy_params['ltf_slow'] = st.sidebar.number_input("LTF Slow MA Trigger", min_value=10, max_value=200, value=30)
 
 st.sidebar.subheader("Futures Parameters")
 initial_balance = st.sidebar.number_input("Initial Balance (USDT)", min_value=100, value=10000, step=100)
 leverage = st.sidebar.slider("Leverage", min_value=1, max_value=100, value=10)
 stop_loss_pct = st.sidebar.number_input("Stop Loss (%)", min_value=0.0, max_value=100.0, value=2.0, step=0.1, help="Set to 0 to disable")
 take_profit_pct = st.sidebar.number_input("Take Profit (%)", min_value=0.0, max_value=1000.0, value=5.0, step=0.1, help="Set to 0 to disable")
+trailing_stop_pct = st.sidebar.number_input("Trailing Stop Loss (%)", min_value=0.0, max_value=100.0, value=1.5, step=0.1, help="Moves SL up with profit. Set to 0 to disable.")
 
 # Main Execution
 with st.spinner('Fetching Data...'):
@@ -66,7 +71,8 @@ else:
             initial_balance=initial_balance,
             leverage=leverage,
             stop_loss_pct=stop_loss_pct,
-            take_profit_pct=take_profit_pct
+            take_profit_pct=take_profit_pct,
+            trailing_stop_pct=trailing_stop_pct
         )
 
     # --- UI Layout ---
@@ -121,6 +127,10 @@ else:
         fig.add_trace(go.Scatter(x=df_results.index, y=df_results['grid_top'], line=dict(color='rgba(255,0,0,0.5)', width=1, dash='dot'), name='Grid Top'), row=price_row, col=1)
         fig.add_trace(go.Scatter(x=df_results.index, y=df_results['grid_bottom'], line=dict(color='rgba(0,255,0,0.5)', width=1, dash='dot'), name='Grid Bottom'), row=price_row, col=1)
         fig.add_trace(go.Scatter(x=df_results.index, y=df_results['grid_mid'], line=dict(color='rgba(0,0,0,0.5)', width=1), name='Grid Mid'), row=price_row, col=1)
+    elif strategy_type == "Multi-Timeframe (MTF) Alignment":
+        fig.add_trace(go.Scatter(x=df_results.index, y=df_results['htf_sma'], line=dict(color='black', width=3), name='Daily Trend (HTF)'), row=price_row, col=1)
+        fig.add_trace(go.Scatter(x=df_results.index, y=df_results['ltf_fast_ma'], line=dict(color='orange', width=1.5), name='LTF Fast MA'), row=price_row, col=1)
+        fig.add_trace(go.Scatter(x=df_results.index, y=df_results['ltf_slow_ma'], line=dict(color='blue', width=1.5), name='LTF Slow MA'), row=price_row, col=1)
 
     # Entry Signals (Crossovers)
     long_signals = df_results[df_results['crossover'] == 1]
